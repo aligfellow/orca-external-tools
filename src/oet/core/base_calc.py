@@ -40,6 +40,7 @@ CALCULATOR_CLASSES = {
     "aimnet2": ("oet.calculator.aimnet2", "Aimnet2Calc"),
     "gxtb": ("oet.calculator.gxtb", "GxtbCalc"),
     "gxtb_alpb": ("oet.calculator.gxtb_alpb", "GxtbAlpbCalc"),
+    "mace": ("oet.calculator.mace", "MaceCalc"),
     "mlatom": ("oet.calculator.mlatom", "MlatomCalc"),
     "mopac": ("oet.calculator.mopac", "MopacCalc"),
     "uma": ("oet.calculator.uma", "UmaCalc"),
@@ -338,6 +339,18 @@ class BaseCalc(ABC):
         ----------
         parser: ArgumentParser
             Parser that should be extended
+        """
+        pass
+
+    def release(self) -> None:
+        """
+        Release device-side resources held by this calculator.
+
+        No-op by default. Calculators that hold device-resident state
+        (GPU models, compiled artifacts, etc.) override to move models
+        to CPU, drop references, and call torch.cuda.empty_cache().
+        Server-mode worker cache eviction calls this before evicting
+        a cached calculator. Must be idempotent.
         """
         pass
 
