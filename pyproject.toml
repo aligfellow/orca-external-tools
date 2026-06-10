@@ -49,6 +49,7 @@ packages = ["src/oet"]
 oet_aenet = "oet.calculator.aenet:main"
 oet_aimnet2 = "oet.calculator.aimnet2:main"
 oet_gxtb = "oet.calculator.gxtb:main"
+oet_gxtb_alpb = "oet.calculator.gxtb_alpb:main"
 oet_mlatom = "oet.calculator.mlatom:main"
 oet_mopac = "oet.calculator.mopac:main"
 oet_uma = "oet.calculator.uma:main"
