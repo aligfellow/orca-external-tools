@@ -39,6 +39,7 @@ CALCULATOR_CLASSES = {
     "aenet": ("oet.calculator.aenet", "AenetCalc"),
     "aimnet2": ("oet.calculator.aimnet2", "Aimnet2Calc"),
     "gxtb": ("oet.calculator.gxtb", "GxtbCalc"),
+    "gxtb_alpb": ("oet.calculator.gxtb_alpb", "GxtbAlpbCalc"),
     "mace": ("oet.calculator.mace", "MaceCalc"),
     "mlatom": ("oet.calculator.mlatom", "MlatomCalc"),
     "mopac": ("oet.calculator.mopac", "MopacCalc"),
