@@ -9,6 +9,9 @@ grad    = grad(g-xTB, gas) + [grad(GFN2, ALPB) - grad(GFN2, gas)]
 Uses the modified xtb binary (github.com/grimme-lab/g-xTB), which supports both --gxtb
 and standard GFN2-xTB. Three xtb single-points are performed per ORCA gradient call.
 
+Without -s/--solvent (or with -s none), no correction is applied and only the single
+gas-phase g-xTB run is performed.
+
 Provides
 --------
 class: GxtbAlpbCalc(BaseCalc)
@@ -50,8 +53,11 @@ class GxtbAlpbCalc(BaseCalc):
             "-s",
             "--solvent",
             dest="solvent",
-            default="thf",
-            help="Solvent name passed to xtb's --alpb (default: thf)",
+            default=None,
+            help=(
+                "Solvent name passed to xtb's --alpb. If omitted (or set to 'none'/'gas'/'vacuum'), "
+                "no solvation correction is applied and only the gas-phase g-xTB run is performed."
+            ),
         )
 
     def read_xtbout(
@@ -183,6 +189,7 @@ class GxtbAlpbCalc(BaseCalc):
         Routine for calculating energy and optional gradient.
         Runs three xtb jobs (g-xTB gas, GFN2-ALPB, GFN2 gas) and combines them
         into a g-xTB + Δsolv(GFN2-ALPB) energy and gradient.
+        If no solvent is requested, only the single g-xTB gas-phase job is run.
         Writes ORCA output
 
         Parameters
@@ -197,13 +204,17 @@ class GxtbAlpbCalc(BaseCalc):
         Returns
         -------
         float
-            The combined energy (Eh): E(g-xTB) + [E(GFN2,ALPB) - E(GFN2,gas)]
+            The combined energy (Eh): E(g-xTB) + [E(GFN2,ALPB) - E(GFN2,gas)],
+            or just E(g-xTB) if no solvent was requested
         list[float]
             Combined flattened gradient vector (Eh/Bohr), if computed, otherwise empty
         """
         # Get parsed options
         prog = args_parsed.get("prog")
         solvent = args_parsed.get("solvent")
+        # No solvent requested -> pure gas-phase g-xTB, skip the two GFN2 runs
+        if solvent is not None and solvent.strip().lower() in ("", "none", "gas", "vacuum"):
+            solvent = None
         # Set and check the program path if its executable
         calc_data.set_program_path(prog)
         if calc_data.prog_path:
@@ -235,56 +246,71 @@ class GxtbAlpbCalc(BaseCalc):
             dograd=calc_data.dograd,
         )
 
-        # 2) GFN2-xTB with ALPB(solvent)
-        out_alpb = self.run_xtb(
-            calc_data=calc_data,
-            namespace=ns_alpb,
-            method_args=["--gfn", "2", "--alpb", solvent],
-            extra_args=args_not_parsed,
-        )
-        e_alpb, g_alpb = self.read_xtbout(
-            output_file=out_alpb,
-            grad_file=f"{ns_alpb}.gradient",
-            natoms=natoms,
-            dograd=calc_data.dograd,
-        )
+        # Sub-outputs to concatenate into the file the framework prints to STDOUT
+        sub_outputs = [("g-xTB (gas)", out_gxtb)]
 
-        # 3) GFN2-xTB gas-phase reference
-        out_gas = self.run_xtb(
-            calc_data=calc_data,
-            namespace=ns_gas,
-            method_args=["--gfn", "2"],
-            extra_args=args_not_parsed,
-        )
-        e_gas, g_gas = self.read_xtbout(
-            output_file=out_gas,
-            grad_file=f"{ns_gas}.gradient",
-            natoms=natoms,
-            dograd=calc_data.dograd,
-        )
-
-        # Δsolv combination
-        energy = e_gxtb + (e_alpb - e_gas)
-        if calc_data.dograd:
-            gradient = [g_gxtb[i] + (g_alpb[i] - g_gas[i]) for i in range(3 * natoms)]
+        if solvent is None:
+            # Gas phase: the g-xTB run is the whole calculation
+            energy = e_gxtb
+            gradient = g_gxtb
+            summary = [
+                "\n========== gas phase (no solvation correction) ==========\n",
+                f"E(g-xTB, gas)          = {e_gxtb:.10f} Eh\n",
+            ]
         else:
-            gradient = []
+            # 2) GFN2-xTB with ALPB(solvent)
+            out_alpb = self.run_xtb(
+                calc_data=calc_data,
+                namespace=ns_alpb,
+                method_args=["--gfn", "2", "--alpb", solvent],
+                extra_args=args_not_parsed,
+            )
+            e_alpb, g_alpb = self.read_xtbout(
+                output_file=out_alpb,
+                grad_file=f"{ns_alpb}.gradient",
+                natoms=natoms,
+                dograd=calc_data.dograd,
+            )
 
-        # Concatenate the three sub-outputs into the file the framework prints to STDOUT
-        with open(calc_data.output_file, "w") as fout:
-            for label, fpath in (
-                ("g-xTB (gas)", out_gxtb),
+            # 3) GFN2-xTB gas-phase reference
+            out_gas = self.run_xtb(
+                calc_data=calc_data,
+                namespace=ns_gas,
+                method_args=["--gfn", "2"],
+                extra_args=args_not_parsed,
+            )
+            e_gas, g_gas = self.read_xtbout(
+                output_file=out_gas,
+                grad_file=f"{ns_gas}.gradient",
+                natoms=natoms,
+                dograd=calc_data.dograd,
+            )
+
+            # Δsolv combination
+            energy = e_gxtb + (e_alpb - e_gas)
+            if calc_data.dograd:
+                gradient = [g_gxtb[i] + (g_alpb[i] - g_gas[i]) for i in range(3 * natoms)]
+            else:
+                gradient = []
+
+            sub_outputs += [
                 (f"GFN2 ALPB({solvent})", out_alpb),
                 ("GFN2 (gas)", out_gas),
-            ):
+            ]
+            summary = [
+                "\n========== Δsolv combination ==========\n",
+                f"{'E(g-xTB, gas)':<22} = {e_gxtb:.10f} Eh\n",
+                f"{f'E(GFN2 ALPB,{solvent})':<22} = {e_alpb:.10f} Eh\n",
+                f"{'E(GFN2, gas)':<22} = {e_gas:.10f} Eh\n",
+                f"{'E(total)':<22} = {energy:.10f} Eh\n",
+            ]
+
+        with open(calc_data.output_file, "w") as fout:
+            for label, fpath in sub_outputs:
                 fout.write(f"\n========== {label}: {fpath.name} ==========\n")
                 with open(fpath) as fin:
                     fout.write(fin.read())
-            fout.write("\n========== Δsolv combination ==========\n")
-            fout.write(f"E(g-xTB, gas)         = {e_gxtb:.10f} Eh\n")
-            fout.write(f"E(GFN2 ALPB,{solvent}) = {e_alpb:.10f} Eh\n")
-            fout.write(f"E(GFN2, gas)          = {e_gas:.10f} Eh\n")
-            fout.write(f"E(total)              = {energy:.10f} Eh\n")
+            fout.writelines(summary)
 
         return energy, gradient
 

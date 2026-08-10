@@ -34,7 +34,7 @@ class GxtbCalc(BaseCalc):
     @property
     def PROGRAM_NAMES(self) -> list[str]:
         """Program names to search for in PATH"""
-        return ["gxtb", "g-xTB", "g-xtb"]
+        return ["xtb", "gxtb", "g-xTB", "g-xtb"]
 
     @classmethod
     def extend_parser(cls, parser: ArgumentParser) -> None:
