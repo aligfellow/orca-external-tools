@@ -175,8 +175,9 @@ def copy_oet_scripts(venv_dir: Path, dest_dir: Path, extras: Sequence[str]) -> N
     count = 0
     for script in bin_dir.glob("oet*"):
         if script.is_file():
-            # skip not installed extras
-            if (module := script.name.removeprefix("oet_")) in EXTRAS and module not in extras:
+            # skip not installed extras (an ALPB-corrected wrapper needs its method's extra)
+            module = script.name.removeprefix("oet_").removesuffix("_alpb")
+            if module in EXTRAS and module not in extras:
                 continue
             target = dest_dir / script.name
             shutil.copy2(script, target)  # copy with metadata (executable bit)

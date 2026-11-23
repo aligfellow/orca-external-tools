@@ -81,6 +81,14 @@ flags, GPU server deployment notes, and complete ORCA-input examples.
 and performance flags specific to MACE. See
 [`readmes/mace.md`](readmes/mace.md) for further details.
 
+### GFN2-ALPB solvation corrections
+
+`oet_gxtb_alpb` (g-xTB) and `oet_uma_alpb` (UMA, also as `oet_server uma_alpb`)
+add an implicit-solvation correction, E(GFN2, ALPB) − E(GFN2, gas) from the xtb binary,
+to a gas-phase method with no ALPB of its own. Name the solvent with `-s <solvent>`;
+without it they run the plain gas-phase method. See
+[`readmes/alpb.md`](readmes/alpb.md) for the options and ORCA-input examples.
+
 ## Interface
 
 All scripts must be executable as:
