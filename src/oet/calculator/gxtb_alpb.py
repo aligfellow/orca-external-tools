@@ -10,175 +10,23 @@ Uses the modified xtb binary (github.com/grimme-lab/g-xTB), which supports both 
 and standard GFN2-xTB. Three xtb single-points are performed per ORCA gradient call.
 
 Without -s/--solvent (or with -s none), no correction is applied and only the single
-gas-phase g-xTB run is performed.
+gas-phase g-xTB run is performed. The correction is shared with other wrappers, see oet.core.alpb.
 
 Provides
 --------
-class: GxtbAlpbCalc(BaseCalc)
+class: GxtbAlpbCalc(AlpbCorrection)
     Class for performing a g-xTB calculation with a GFN2-ALPB Δsolv correction
 main: function
     Main function
 """
 
-from argparse import ArgumentParser
-from pathlib import Path
 from typing import Any
 
-from oet.core.base_calc import BaseCalc, CalculationData
-from oet.core.misc import (
-    check_path,
-    mult_to_nue,
-    nat_from_xyzfile,
-    run_command,
-)
+from oet.core.alpb import AlpbCorrection
+from oet.core.base_calc import CalculationData
 
 
-class GxtbAlpbCalc(BaseCalc):
-    @property
-    def PROGRAM_NAMES(self) -> list[str]:
-        """Program names to search for in PATH"""
-        return ["xtb", "otool_xtb"]
-
-    @classmethod
-    def extend_parser(cls, parser: ArgumentParser) -> None:
-        """Add gxtb_alpb parsing options.
-
-        Parameters
-        ----------
-        parser: ArgumentParser
-            Parser that should be extended
-        """
-        parser.add_argument("-e", "--exe", dest="prog", help="Path to the xtb executable")
-        parser.add_argument(
-            "-s",
-            "--solvent",
-            dest="solvent",
-            default=None,
-            help=(
-                "Solvent name passed to xtb's --alpb. If omitted (or set to 'none'/'gas'/'vacuum'), "
-                "no solvation correction is applied and only the gas-phase g-xTB run is performed."
-            ),
-        )
-
-    def read_xtbout(
-        self,
-        output_file: str | Path,
-        grad_file: str | Path,
-        natoms: int,
-        dograd: bool,
-    ) -> tuple[float, list[float]]:
-        """
-        Read energy and (optionally) gradient from one xtb run.
-
-        Parameters
-        ----------
-        output_file: str | Path
-            xtb stdout file containing the 'TOTAL ENERGY' line
-        grad_file: str | Path
-            Turbomole-style .gradient file (only read if dograd)
-        natoms: int
-            Number of atoms in the system
-        dograd: bool
-            Whether to read the gradient
-
-        Returns
-        -------
-        float
-            The computed energy (Eh)
-        list[float]
-            The gradient (X,Y,Z) for each atom (Eh/Bohr)
-        """
-        energy = None
-        gradient = []
-        # read the energy from the output file
-        out_path = check_path(output_file)
-        with out_path.open() as f:
-            for line in f:
-                if "TOTAL ENERGY" in line:
-                    energy = float(line.split()[3])
-                    break
-        # read the gradient from the .gradient file
-        if dograd:
-            grad_path = check_path(grad_file)
-            natoms_read = 0
-            with grad_path.open() as f:
-                for line in f:
-                    if "$grad" in line:
-                        break
-                for line in f:
-                    fields = line.split()
-                    if len(fields) == 4:
-                        natoms_read += 1
-                    elif len(fields) == 3:
-                        gradient += [float(i) for i in fields]
-                    elif "$end" in line:
-                        break
-                if natoms_read != natoms:
-                    print(
-                        f"Number of atoms read: {natoms_read} does not match the expected: {natoms}"
-                    )
-                    exit(1)
-                if len(gradient) != 3 * natoms:
-                    print(
-                        f"Number of gradient entries: {len(gradient)} does not match 3x number of atoms: {natoms}"
-                    )
-                    exit(1)
-        if not energy:
-            raise ValueError(f"Total energy not found in file {output_file}")
-        return energy, gradient
-
-    def run_xtb(
-        self,
-        calc_data: CalculationData,
-        namespace: str,
-        method_args: list[str],
-        extra_args: list[str],
-    ) -> Path:
-        """
-        Run the xtb program once with a dedicated namespace and redirect its
-        STDOUT and STDERR to a per-run logfile.
-
-        Parameters
-        ----------
-        calc_data: CalculationData
-            Object with calculation data for the run
-        namespace: str
-            Value passed to xtb's --namespace; also used to name the logfile
-        method_args: list[str]
-            Method-specific xtb arguments (e.g., ['--gxtb'] or ['--gfn', '2', '--alpb', 'thf'])
-        extra_args: list[str]
-            Additional pass-through arguments from the ORCA input
-
-        Returns
-        -------
-        Path
-            Path to the per-run logfile that was written
-        """
-        # For the xtb package, not all additional command-line arguments (e.g., specifying a solvation model)
-        # can be passed before the structure input, so pass the additional args at the end.
-        args = [
-            str(i)
-            for i in [
-                calc_data.xyzfile,
-                "-c",
-                calc_data.charge,
-                "-P",
-                calc_data.ncores,
-                "--namespace",
-                namespace,
-            ]
-        ] + method_args + extra_args
-        nue = mult_to_nue(calc_data.mult)
-        if nue:
-            args += ["-u", str(nue)]
-        if calc_data.dograd:
-            args += ["--grad"]
-        if not calc_data.prog_path:
-            raise RuntimeError("Path to program is None.")
-        run_log = calc_data.tmp_dir / f"{namespace}.out"
-        run_command(calc_data.prog_path, run_log, args)
-        return run_log
-
+class GxtbAlpbCalc(AlpbCorrection):
     def calc(
         self,
         calc_data: CalculationData,
@@ -187,9 +35,7 @@ class GxtbAlpbCalc(BaseCalc):
     ) -> tuple[float, list[float]]:
         """
         Routine for calculating energy and optional gradient.
-        Runs three xtb jobs (g-xTB gas, GFN2-ALPB, GFN2 gas) and combines them
-        into a g-xTB + Δsolv(GFN2-ALPB) energy and gradient.
-        If no solvent is requested, only the single g-xTB gas-phase job is run.
+        Runs g-xTB in the gas phase and adds the GFN2-ALPB correction if a solvent is requested.
         Writes ORCA output
 
         Parameters
@@ -199,7 +45,7 @@ class GxtbAlpbCalc(BaseCalc):
         args_parsed: dict[str, Any]
             Arguments parsed as defined in extend_parser
         args_not_parsed: list[str]
-            Arguments not parsed so far. Forwarded to all three xtb runs.
+            Arguments not parsed so far. Forwarded to all xtb runs.
 
         Returns
         -------
@@ -209,110 +55,26 @@ class GxtbAlpbCalc(BaseCalc):
         list[float]
             Combined flattened gradient vector (Eh/Bohr), if computed, otherwise empty
         """
-        # Get parsed options
-        prog = args_parsed.get("prog")
-        solvent = args_parsed.get("solvent")
-        # No solvent requested -> pure gas-phase g-xTB, skip the two GFN2 runs
-        if solvent is not None and solvent.strip().lower() in ("", "none", "gas", "vacuum"):
-            solvent = None
-        # Set and check the program path if its executable
-        calc_data.set_program_path(prog)
-        if calc_data.prog_path:
-            print(f"Using executable {calc_data.prog_path}")
-        else:
-            raise FileNotFoundError(
-                f"Could not find a valid executable from standard program names: {self.PROGRAM_NAMES}"
-            )
+        solvent = self.requested_solvent(args_parsed)
+        self.set_xtb_path(calc_data, args_parsed.get("prog"))
 
-        # get the number of atoms from the xyz file (used for parsing each gradient)
-        natoms = nat_from_xyzfile(xyz_file=calc_data.xyzfile)
-
-        # Per-component xtb namespaces (also used to name the gradient and logfiles)
-        ns_gxtb = f"{calc_data.basename}_gxtb"
-        ns_alpb = f"{calc_data.basename}_alpb"
-        ns_gas = f"{calc_data.basename}_gas"
-
-        # 1) g-xTB gas-phase
-        out_gxtb = self.run_xtb(
+        # g-xTB gas-phase
+        energy, gradient, out_gxtb = self.run_xtb(
             calc_data=calc_data,
-            namespace=ns_gxtb,
+            namespace=f"{calc_data.basename}_gxtb",
             method_args=["--gxtb"],
             extra_args=args_not_parsed,
         )
-        e_gxtb, g_gxtb = self.read_xtbout(
-            output_file=out_gxtb,
-            grad_file=f"{ns_gxtb}.gradient",
-            natoms=natoms,
-            dograd=calc_data.dograd,
+
+        return self.add_alpb_correction(
+            calc_data=calc_data,
+            method="g-xTB",
+            energy=energy,
+            gradient=gradient,
+            solvent=solvent,
+            sub_outputs=[("g-xTB (gas)", out_gxtb)],
+            extra_args=args_not_parsed,
         )
-
-        # Sub-outputs to concatenate into the file the framework prints to STDOUT
-        sub_outputs = [("g-xTB (gas)", out_gxtb)]
-
-        if solvent is None:
-            # Gas phase: the g-xTB run is the whole calculation
-            energy = e_gxtb
-            gradient = g_gxtb
-            summary = [
-                "\n========== gas phase (no solvation correction) ==========\n",
-                f"E(g-xTB, gas)          = {e_gxtb:.10f} Eh\n",
-            ]
-        else:
-            # 2) GFN2-xTB with ALPB(solvent)
-            out_alpb = self.run_xtb(
-                calc_data=calc_data,
-                namespace=ns_alpb,
-                method_args=["--gfn", "2", "--alpb", solvent],
-                extra_args=args_not_parsed,
-            )
-            e_alpb, g_alpb = self.read_xtbout(
-                output_file=out_alpb,
-                grad_file=f"{ns_alpb}.gradient",
-                natoms=natoms,
-                dograd=calc_data.dograd,
-            )
-
-            # 3) GFN2-xTB gas-phase reference
-            out_gas = self.run_xtb(
-                calc_data=calc_data,
-                namespace=ns_gas,
-                method_args=["--gfn", "2"],
-                extra_args=args_not_parsed,
-            )
-            e_gas, g_gas = self.read_xtbout(
-                output_file=out_gas,
-                grad_file=f"{ns_gas}.gradient",
-                natoms=natoms,
-                dograd=calc_data.dograd,
-            )
-
-            # Δsolv combination
-            energy = e_gxtb + (e_alpb - e_gas)
-            if calc_data.dograd:
-                gradient = [g_gxtb[i] + (g_alpb[i] - g_gas[i]) for i in range(3 * natoms)]
-            else:
-                gradient = []
-
-            sub_outputs += [
-                (f"GFN2 ALPB({solvent})", out_alpb),
-                ("GFN2 (gas)", out_gas),
-            ]
-            summary = [
-                "\n========== Δsolv combination ==========\n",
-                f"{'E(g-xTB, gas)':<22} = {e_gxtb:.10f} Eh\n",
-                f"{f'E(GFN2 ALPB,{solvent})':<22} = {e_alpb:.10f} Eh\n",
-                f"{'E(GFN2, gas)':<22} = {e_gas:.10f} Eh\n",
-                f"{'E(total)':<22} = {energy:.10f} Eh\n",
-            ]
-
-        with open(calc_data.output_file, "w") as fout:
-            for label, fpath in sub_outputs:
-                fout.write(f"\n========== {label}: {fpath.name} ==========\n")
-                with open(fpath) as fin:
-                    fout.write(fin.read())
-            fout.writelines(summary)
-
-        return energy, gradient
 
 
 def main() -> None:
